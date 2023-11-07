@@ -1,10 +1,13 @@
 import {warpShader} from '../common';
 import {Matrix} from '../../core/matrix';
-import {simpleShader} from '../../core/canvas';
+import {PerspectiveRenderer} from '../../index';
+import {Shader} from '../../core/shader';
 
-const matrixWarps = new WeakMap<WebGLRenderingContext, WebGLShader>();
-export function matrixWarp(matrix: Matrix, gl: WebGLRenderingContext) {
-    let matrixWarpShader = matrixWarps.get(gl);
+const matrixWarps = new WeakMap<WebGLRenderingContext, Shader>();
+export function matrixWarp(matrix: Matrix, renderer: PerspectiveRenderer) {
+    const info = renderer['info'];
+
+    let matrixWarpShader = matrixWarps.get(info.gl);
     if (!matrixWarpShader) {
         matrixWarpShader = warpShader('\
         uniform mat3 matrix;\
@@ -14,8 +17,8 @@ export function matrixWarp(matrix: Matrix, gl: WebGLRenderingContext) {
         vec3 warp = matrix * vec3(coord, 1.0);\
         coord = warp.xy / warp.z;\
         if (useTextureSpace) coord = (coord * 0.5 + 0.5) * texSize;\
-    ', gl);
-        matrixWarps.set(gl, matrixWarpShader);
+    ', info.gl);
+        matrixWarps.set(info.gl, matrixWarpShader);
     }
 
     // Flatten all members of matrix into one big list
@@ -31,11 +34,9 @@ export function matrixWarp(matrix: Matrix, gl: WebGLRenderingContext) {
     }
     if (m.length != 9) throw 'can only warp with 2x2 or 3x3 matrix';
 
-    simpleShader.call(this, matrixWarpShader, {
+    renderer['simpleShader'](matrixWarpShader, {
         matrix: m,
-        texSize: [this.width, this.height],
+        texSize: [renderer.width, renderer.height],
         useTextureSpace: 0
     });
-
-    return this;
 }
