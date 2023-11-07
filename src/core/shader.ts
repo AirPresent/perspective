@@ -1,19 +1,37 @@
-export class Shader {
-    private static defaultVertexSource = '\
-    attribute vec2 vertex;\
-    attribute vec2 _texCoord;\
-    varying vec2 texCoord;\
-    void main() {\
-        texCoord = _texCoord;\
-        gl_Position = vec4(vertex * 2.0 - 1.0, 0.0, 1.0);\
-    }';
+export class MatrixShader {
+    private static vertexSource = `
+        attribute vec2 vertex;
+        attribute vec2 _texCoord;
+        
+        varying vec2 texCoord;
+        
+        void main() {
+            texCoord = _texCoord;
+            gl_Position = vec4(vertex * 2.0 - 1.0, 0.0, 1.0);
+        }
+    `;
 
-    private static defaultFragmentSource = '\
-    uniform sampler2D texture;\
-    varying vec2 texCoord;\
-    void main() {\
-        gl_FragColor = texture2D(texture, texCoord);\
-    }';
+    private static fragmentSource = `
+        precision highp float;
+        uniform mat3 matrix;
+        uniform sampler2D texture;
+        
+        uniform vec2 texSize;
+        varying vec2 texCoord;
+        
+        void main() {
+            vec2 coord = texCoord * texSize;
+            vec3 warp = matrix * vec3(coord, 1.0);
+            
+            coord = warp.xy / warp.z;
+            coord.y = texSize.y - coord.y;
+            
+            gl_FragColor = texture2D(texture, coord / texSize);
+            
+            vec2 clampedCoord = clamp(coord, vec2(0.0), texSize);
+            if (coord != clampedCoord) gl_FragColor.a *= max(0.0, 1.0 - length(coord - clampedCoord)); /* fade to transparent if we are outside the image */
+        }
+    `;
 
     private compileSource(type, source) {
         const shader = this.gl.createShader(type);
@@ -29,7 +47,7 @@ export class Shader {
     private program: WebGLProgram;
 
     private gl: WebGLRenderingContext;
-    constructor(vertexSource, fragmentSource, context: WebGLRenderingContext) {
+    constructor(context: WebGLRenderingContext) {
         this.gl = context;
 
         this.vertexAttribute = null;
@@ -37,12 +55,8 @@ export class Shader {
 
         this.program = this.gl.createProgram();
 
-        vertexSource = vertexSource || Shader.defaultVertexSource;
-        fragmentSource = fragmentSource || Shader.defaultFragmentSource;
-        fragmentSource = 'precision highp float;' + fragmentSource; // annoying requirement is annoying
-
-        this.gl.attachShader(this.program, this.compileSource(this.gl.VERTEX_SHADER, vertexSource));
-        this.gl.attachShader(this.program, this.compileSource(this.gl.FRAGMENT_SHADER, fragmentSource));
+        this.gl.attachShader(this.program, this.compileSource(this.gl.VERTEX_SHADER, MatrixShader.vertexSource));
+        this.gl.attachShader(this.program, this.compileSource(this.gl.FRAGMENT_SHADER, MatrixShader.fragmentSource));
 
         this.gl.linkProgram(this.program);
         if (!this.gl.getProgramParameter(this.program, this.gl.LINK_STATUS))
@@ -89,50 +103,35 @@ export class Shader {
         return this;
     };
 
-    // textures are uniforms too but for some reason can't be specified by gl.uniform1f,
-    // even though floating point numbers represent the integers 0 through 7 exactly
-    public textures(textures) {
-        this.gl.useProgram(this.program);
-        for (const name in textures) {
-            if (!textures.hasOwnProperty(name)) continue;
-            this.gl.uniform1i(this.gl.getUniformLocation(this.program, name), textures[name]);
-        }
-
-        return this;
-    };
-
     private static vertexBuffers = new WeakMap<WebGLRenderingContext, WebGLBuffer>();
     private static texCoordBuffers = new WeakMap<WebGLRenderingContext, WebGLBuffer>();
-    public drawRect(left?: number, top?: number, right?: number, bottom?: number) {
-        const viewport = this.gl.getParameter(this.gl.VIEWPORT);
+    public drawRect() {
+        const positions = [
+            0, 0,
+            0, 1,
+            1, 0,
+            1, 0,
+            0, 1,
+            1, 1,
+        ];
 
-        if (top === undefined) top = 0;
-        if (left === undefined) left = 0;
-        if (right === undefined) right = 1;
-        if (bottom === undefined) bottom = 1;
-
-        top    = (top    - viewport[1]) / viewport[3];
-        left   = (left   - viewport[0]) / viewport[2];
-        right  = (right  - viewport[0]) / viewport[2];
-        bottom = (bottom - viewport[1]) / viewport[3];
-
-        let vertexBuffer = Shader.vertexBuffers.get(this.gl);
-        let texCoordBuffer = Shader.texCoordBuffers.get(this.gl);
+        let vertexBuffer = MatrixShader.vertexBuffers.get(this.gl);
+        let texCoordBuffer = MatrixShader.texCoordBuffers.get(this.gl);
 
         if (vertexBuffer == null) {
             vertexBuffer = this.gl.createBuffer();
-            Shader.vertexBuffers.set(this.gl, vertexBuffer);
+            MatrixShader.vertexBuffers.set(this.gl, vertexBuffer);
         }
 
         this.gl.bindBuffer(this.gl.ARRAY_BUFFER, vertexBuffer);
-        this.gl.bufferData(this.gl.ARRAY_BUFFER, new Float32Array([ left, top, left, bottom, right, top, right, bottom ]), this.gl.STATIC_DRAW);
+        this.gl.bufferData(this.gl.ARRAY_BUFFER, new Float32Array(positions), this.gl.STATIC_DRAW);
 
         if (texCoordBuffer == null) {
             texCoordBuffer = this.gl.createBuffer();
-            Shader.texCoordBuffers.set(this.gl, texCoordBuffer);
+            MatrixShader.texCoordBuffers.set(this.gl, texCoordBuffer);
 
             this.gl.bindBuffer(this.gl.ARRAY_BUFFER, texCoordBuffer);
-            this.gl.bufferData(this.gl.ARRAY_BUFFER, new Float32Array([ 0, 0, 0, 1, 1, 0, 1, 1 ]), this.gl.STATIC_DRAW);
+            this.gl.bufferData(this.gl.ARRAY_BUFFER, new Float32Array(positions), this.gl.STATIC_DRAW);
         }
 
         if (this.vertexAttribute == null) {
@@ -152,12 +151,6 @@ export class Shader {
         this.gl.bindBuffer(this.gl.ARRAY_BUFFER, texCoordBuffer);
         this.gl.vertexAttribPointer(this.texCoordAttribute, 2, this.gl.FLOAT, false, 0, 0);
 
-        this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
-    };
-
-    private static shaders = new WeakMap<WebGLRenderingContext, Shader>();
-    public static getDefaultShader(gl: WebGLRenderingContext) {
-        if (!Shader.shaders.has(gl)) Shader.shaders.set(gl, new Shader(null, null, gl));
-        return Shader.shaders.get(gl);
+        this.gl.drawArrays(this.gl.TRIANGLES, 0, 6);
     };
 }

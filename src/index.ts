@@ -1,60 +1,57 @@
-import {Quad} from './core/matrix';
-import {perspective} from './filters/warp/perspective';
+import {Quad, Matrix} from './core/matrix';
 import {Texture} from './core/texture';
-import {Shader} from './core/shader';
+import {MatrixShader} from './core/shader';
 
-require('./OES_texture_float_linear-polyfill.js');
+interface Source {
+    canvas: HTMLCanvasElement;
+
+    a: Quad;
+    b: Quad;
+}
 
 export class PerspectiveRenderer {
-    private a: Quad;
-    private b: Quad;
-
-    private source: HTMLCanvasElement;
+    private sources: Source[] = [];
+    private frame: HTMLCanvasElement;
     private target: HTMLCanvasElement;
-
-    private info: any;
 
     public width: number;
     public height: number;
 
-    constructor(canvas: HTMLCanvasElement, a: Quad, b: Quad, width: number, height: number) {
-        this.a = a;
-        this.b = b;
+    private texture: Texture;
+    private shader: MatrixShader;
 
+    private gl: WebGLRenderingContext;
+    private ctx: CanvasRenderingContext2D;
+
+    constructor(canvas: HTMLCanvasElement, width: number, height: number) {
         this.width = width;
         this.height = height;
 
-        this.source = canvas;
-        this.setTarget(document.createElement('canvas'));
+        this.setTarget(canvas);
+
+        this.frame = document.createElement('canvas');
+        this.initialize();
     }
 
-    public setA(a: Quad) {
-        this.a = a;
+    public clearSources() {
+        this.sources = [];
     }
 
-    public setB(b: Quad) {
-        this.b = b;
-    }
+    public addSource(canvas: HTMLCanvasElement, a: Quad, b: Quad) {
+        const source = {
+            canvas,
 
-    public setSource(canvas: HTMLCanvasElement) {
-        this.source = canvas;
+            a,
+            b,
+        };
+
+        this.sources.push(source);
+        return source;
     }
 
     public setTarget(canvas: HTMLCanvasElement) {
         this.target = canvas;
-
-        const gl = canvas.getContext('experimental-webgl', { premultipliedAlpha: false });
-        if (!gl) throw new Error('This browser does not support WebGL');
-
-        this.info = {
-            gl: gl,
-            isInitialized: false,
-            texture: null,
-            spareTexture: null,
-            flippedShader: null
-        };
-
-        this.initialize();
+        this.ctx = canvas.getContext('2d');
     }
 
     public getTarget() {
@@ -62,58 +59,59 @@ export class PerspectiveRenderer {
     }
 
     public render() {
-        const texture = Texture.fromElement(this.source, this.info.gl);
-        texture.use();
+        this.ctx.clearRect(0, 0, this.width, this.height);
 
-        this.info.texture.drawTo(() => Shader.getDefaultShader(this.info.gl).drawRect());
+        // TODO: make sure, that different sizes on the surfaces vs screen still works, without clipping
 
-        perspective(this.a, this.b, this);
+        for (const source of this.sources) {
+            this.gl.clearColor(1, 0, 0, 0);
+            this.gl.clear(this.gl.COLOR_BUFFER_BIT);
 
-        this.info.texture.use();
-        this.info.flippedShader.drawRect();
+            this.texture.loadContentsOf(source.canvas);
+            this.perspective(source);
+
+            this.ctx.drawImage(this.frame, 0, 0);
+        }
     }
 
     private initialize() {
-        let type = this.info.gl.UNSIGNED_BYTE;
+        this.gl = this.frame.getContext('experimental-webgl', { premultipliedAlpha: false }) as WebGLRenderingContext;
+        if (!this.gl) throw new Error('This browser does not support WebGL');
 
-        // Go for floating point buffer textures if we can, it'll make the bokeh
-        // filter look a lot better. Note that on Windows, ANGLE does not let you
-        // render to a floating-point texture when linear filtering is enabled.
-        // See https://crbug.com/172278 for more this.information.
-        if (this.info.gl.getExtension('OES_texture_float') && this.info.gl.getExtension('OES_texture_float_linear')) {
-            const testTexture = new Texture(100, 100, this.info.gl.RGBA, this.info.gl.FLOAT, this.info.gl);
-            try {
-                // Only use gl.FLOAT if we can render to it
-                testTexture.drawTo(() => type = this.info.gl.FLOAT);
-            } catch (e) {}
-            testTexture.destroy();
-        }
+        this.frame.width = this.width;
+        this.frame.height = this.height;
 
-        if (this.info.texture) this.info.texture.destroy();
-        if (this.info.spareTexture) this.info.spareTexture.destroy();
-
-        this.target.width = this.width;
-        this.target.height = this.height;
-
-        this.info.texture = new Texture(this.width, this.height, this.info.gl.RGBA, type, this.info.gl);
-        this.info.spareTexture = new Texture(this.width, this.height, this.info.gl.RGBA, type, this.info.gl);
-
-        this.info.extraTexture = this.info.extraTexture || new Texture(0, 0, this.info.gl.RGBA, type, this.info.gl);
-        this.info.flippedShader = this.info.flippedShader || new Shader(null, '\
-        uniform sampler2D texture;\
-        varying vec2 texCoord;\
-        void main() {\
-            gl_FragColor = texture2D(texture, vec2(texCoord.x, 1.0 - texCoord.y));\
-        }\
-    ', this.info.gl);
-
-        this.info.isInitialized = true;
+        this.shader = new MatrixShader(this.gl);
+        this.texture = new Texture(this.gl.RGBA, this.gl.UNSIGNED_BYTE, this.gl);
     }
 
-    private simpleShader(shader: Shader, uniforms) {
-        this.info.texture.use();
-        this.info.spareTexture.drawTo(() => shader.uniforms(uniforms).drawRect());
-        this.info.spareTexture.swapWith(this.info.texture);
+    perspective(source: Source) {
+        const a = Matrix.getSquareToQuad(source.a);
+        const b = Matrix.getSquareToQuad(source.b);
+        const c = Matrix.multiply(b.inverse, a);
+
+        const uniforms = {
+            matrix: c.data.flat(),
+            texSize: [source.canvas.width, source.canvas.height],
+        };
+
+        this.gl.viewport(0, 0, this.width, this.height);
+
+        this.texture.use();
+        this.shader.uniforms(uniforms).drawRect();
+    }
+
+    destroy() {
+        this.shader.destroy();
+        this.texture.destroy();
+
+        this.gl = null;
+        this.ctx = null;
+
+        this.frame = null;
+        this.target = null;
+
+        this.sources = [];
     }
 }
 
