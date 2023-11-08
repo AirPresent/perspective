@@ -1,12 +1,12 @@
 export class MatrixShader {
     private static vertexSource = `
         attribute vec2 vertex;
-        attribute vec2 _texCoord;
+        attribute vec2 _texCord;
         
-        varying vec2 texCoord;
+        varying vec2 texCord;
         
         void main() {
-            texCoord = _texCoord;
+            texCord = _texCord;
             gl_Position = vec4(vertex * 2.0 - 1.0, 0.0, 1.0);
         }
     `;
@@ -17,19 +17,21 @@ export class MatrixShader {
         uniform sampler2D texture;
         
         uniform vec2 texSize;
-        varying vec2 texCoord;
+        uniform vec2 canvasSize;
         
+        varying vec2 texCord;   
         void main() {
-            vec2 coord = texCoord * texSize;
-            vec3 warp = matrix * vec3(coord, 1.0);
+            vec2 v = texCord;
+            v.y = 1.0 - v.y;
             
-            coord = warp.xy / warp.z;
-            coord.y = texSize.y - coord.y;
+            vec3 warp = matrix * vec3(v * canvasSize, 1.0);
+            v = warp.xy / warp.z;
             
-            gl_FragColor = texture2D(texture, coord / texSize);
+            gl_FragColor = texture2D(texture, v / texSize);
             
-            vec2 clampedCoord = clamp(coord, vec2(0.0), texSize);
-            if (coord != clampedCoord) gl_FragColor.a *= max(0.0, 1.0 - length(coord - clampedCoord)); /* fade to transparent if we are outside the image */
+            vec2 max = min(canvasSize, texSize);
+            vec2 clamped = clamp(v, vec2(0.0), max);
+            if (v != clamped) gl_FragColor.a = 0.0;
         }
     `;
 
@@ -43,7 +45,7 @@ export class MatrixShader {
     }
 
     private vertexAttribute: number;
-    private texCoordAttribute: number;
+    private texCordAttribute: number;
     private program: WebGLProgram;
 
     private gl: WebGLRenderingContext;
@@ -51,7 +53,7 @@ export class MatrixShader {
         this.gl = context;
 
         this.vertexAttribute = null;
-        this.texCoordAttribute = null;
+        this.texCordAttribute = null;
 
         this.program = this.gl.createProgram();
 
@@ -104,7 +106,7 @@ export class MatrixShader {
     };
 
     private static vertexBuffers = new WeakMap<WebGLRenderingContext, WebGLBuffer>();
-    private static texCoordBuffers = new WeakMap<WebGLRenderingContext, WebGLBuffer>();
+    private static texCordBuffers = new WeakMap<WebGLRenderingContext, WebGLBuffer>();
     public drawRect() {
         const positions = [
             0, 0,
@@ -116,7 +118,7 @@ export class MatrixShader {
         ];
 
         let vertexBuffer = MatrixShader.vertexBuffers.get(this.gl);
-        let texCoordBuffer = MatrixShader.texCoordBuffers.get(this.gl);
+        let texCordBuffer = MatrixShader.texCordBuffers.get(this.gl);
 
         if (vertexBuffer == null) {
             vertexBuffer = this.gl.createBuffer();
@@ -126,11 +128,11 @@ export class MatrixShader {
         this.gl.bindBuffer(this.gl.ARRAY_BUFFER, vertexBuffer);
         this.gl.bufferData(this.gl.ARRAY_BUFFER, new Float32Array(positions), this.gl.STATIC_DRAW);
 
-        if (texCoordBuffer == null) {
-            texCoordBuffer = this.gl.createBuffer();
-            MatrixShader.texCoordBuffers.set(this.gl, texCoordBuffer);
+        if (texCordBuffer == null) {
+            texCordBuffer = this.gl.createBuffer();
+            MatrixShader.texCordBuffers.set(this.gl, texCordBuffer);
 
-            this.gl.bindBuffer(this.gl.ARRAY_BUFFER, texCoordBuffer);
+            this.gl.bindBuffer(this.gl.ARRAY_BUFFER, texCordBuffer);
             this.gl.bufferData(this.gl.ARRAY_BUFFER, new Float32Array(positions), this.gl.STATIC_DRAW);
         }
 
@@ -138,9 +140,9 @@ export class MatrixShader {
             this.vertexAttribute = this.gl.getAttribLocation(this.program, 'vertex');
             this.gl.enableVertexAttribArray(this.vertexAttribute);
         }
-        if (this.texCoordAttribute == null) {
-            this.texCoordAttribute = this.gl.getAttribLocation(this.program, '_texCoord');
-            this.gl.enableVertexAttribArray(this.texCoordAttribute);
+        if (this.texCordAttribute == null) {
+            this.texCordAttribute = this.gl.getAttribLocation(this.program, '_texCord');
+            this.gl.enableVertexAttribArray(this.texCordAttribute);
         }
 
         this.gl.useProgram(this.program);
@@ -148,8 +150,8 @@ export class MatrixShader {
         this.gl.bindBuffer(this.gl.ARRAY_BUFFER, vertexBuffer);
         this.gl.vertexAttribPointer(this.vertexAttribute, 2, this.gl.FLOAT, false, 0, 0);
 
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, texCoordBuffer);
-        this.gl.vertexAttribPointer(this.texCoordAttribute, 2, this.gl.FLOAT, false, 0, 0);
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, texCordBuffer);
+        this.gl.vertexAttribPointer(this.texCordAttribute, 2, this.gl.FLOAT, false, 0, 0);
 
         this.gl.drawArrays(this.gl.TRIANGLES, 0, 6);
     };

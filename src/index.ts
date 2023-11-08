@@ -61,8 +61,6 @@ export class PerspectiveRenderer {
     public render() {
         this.ctx.clearRect(0, 0, this.width, this.height);
 
-        // TODO: make sure, that different sizes on the surfaces vs screen still works, without clipping
-
         for (const source of this.sources) {
             this.gl.clearColor(1, 0, 0, 0);
             this.gl.clear(this.gl.COLOR_BUFFER_BIT);
@@ -93,6 +91,7 @@ export class PerspectiveRenderer {
         const uniforms = {
             matrix: c.data.flat(),
             texSize: [source.canvas.width, source.canvas.height],
+            canvasSize: [this.width, this.height],
         };
 
         this.gl.viewport(0, 0, this.width, this.height);
